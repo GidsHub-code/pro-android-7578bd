@@ -1,0 +1,84 @@
+plugins {
+    id 'com.android.application'
+}
+
+// Apply google-services plugin only if google-services.json is provided.
+def googleServicesJson = file('google-services.json')
+if (googleServicesJson.exists()) {
+    apply plugin: 'com.google.gms.google-services'
+}
+
+def hasReleaseSigning = System.getenv("KEYSTORE_PATH") && System.getenv("KEYSTORE_PASSWORD") && System.getenv("KEY_ALIAS") && System.getenv("KEY_PASSWORD")
+
+android {
+    namespace "yfetch.pro"
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "yfetch.pro"
+        minSdk 23
+        targetSdk 35
+        versionCode 7
+        versionName "3.1"
+
+        manifestPlaceholders = [
+            hostName: "yfetch.nnadigideon17.workers.dev",
+            defaultUrl: "https://yfetch.nnadigideon17.workers.dev",
+            admobAppId: "ca-app-pub-9769231127538087~2956004817"
+        ]
+    }
+
+    signingConfigs {
+        release {
+            if (hasReleaseSigning) {
+                storeFile file(System.getenv("KEYSTORE_PATH"))
+                storePassword System.getenv("KEYSTORE_PASSWORD")
+                keyAlias System.getenv("KEY_ALIAS")
+                keyPassword System.getenv("KEY_PASSWORD")
+                storeType System.getenv("KEYSTORE_TYPE") ?: "PKCS12"
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            versionNameSuffix "-debug"
+        }
+        release {
+            minifyEnabled false
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+configurations.all {
+    resolutionStrategy {
+        force 'org.jetbrains.kotlin:kotlin-stdlib:1.9.24'
+        force 'org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.9.24'
+        force 'org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.9.24'
+        force 'org.jetbrains.kotlin:kotlin-stdlib-common:1.9.24'
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'androidx.webkit:webkit:1.12.1'
+    implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
+    implementation 'androidx.localbroadcastmanager:localbroadcastmanager:1.1.0'
+    implementation 'androidx.core:core:1.13.1'
+    implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.9.24'
+
+    // Firebase Cloud Messaging (in-app + system tray push)
+    implementation platform('com.google.firebase:firebase-bom:33.5.1')
+    implementation 'com.google.firebase:firebase-messaging'
+
+    // Google Mobile Ads (AdMob)
+    implementation 'com.google.android.gms:play-services-ads:23.6.0'
+}

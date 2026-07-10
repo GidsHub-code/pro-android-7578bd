@@ -71,16 +71,14 @@ public class MainActivity extends AppCompatActivity {
         requestRuntimePermissions();
         registerFileChooser();
         adView = findViewById(R.id.adView);
-        if (adView != null) {
-            android.util.DisplayMetrics outMetrics = getResources().getDisplayMetrics();
-            int adWidth = (int) (outMetrics.widthPixels / outMetrics.density);
-            adView.setAdSize(com.google.android.gms.ads.AdSize.getCurrentOrientationAnchoredAdaptiveBannerAdSize(this, adWidth));
-        }
         com.google.android.gms.ads.MobileAds.initialize(this, initStatus -> {
             if (adView != null) {
-                adView.loadAd(new com.google.android.gms.ads.AdRequest.Builder().build());
+                try {
+                    adView.loadAd(new com.google.android.gms.ads.AdRequest.Builder().build());
+                } catch (Throwable ignored) {}
             }
         });
+
 
 
         WebSettings s = webView.getSettings();

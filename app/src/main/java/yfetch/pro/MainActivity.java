@@ -42,6 +42,9 @@ public class MainActivity extends AppCompatActivity {
     private String pendingDlContentDisposition;
     private String pendingDlMimeType;
     private long pendingDlContentLength;
+    private String pendingBlobUrl;
+    private String pendingBlobMime;
+    private String pendingBlobDisposition;
 
     private static final String START_URL = "https://yfetch.nnadigideon17.workers.dev";
     private static final String HOST = "yfetch.nnadigideon17.workers.dev";
@@ -97,8 +100,7 @@ public class MainActivity extends AppCompatActivity {
         webView.setDownloadListener((url, userAgent, contentDisposition, mimetype, contentLength) -> {
             if (url == null) return;
             if (url.startsWith("blob:") || url.startsWith("data:")) {
-                // Blob/data URLs can't be downloaded natively — fetch them in JS and pipe base64 back.
-                fetchBlobViaJs(url, mimetype, contentDisposition);
+                queueBlobDownloadWithReward(url, mimetype, contentDisposition);
                 return;
             }
             queueDownloadWithReward(url, userAgent, contentDisposition, mimetype, contentLength);
@@ -309,6 +311,28 @@ public class MainActivity extends AppCompatActivity {
         pendingDlContentDisposition = contentDisposition;
         pendingDlMimeType = mimetype;
         pendingDlContentLength = contentLength;
+        showRewardedAdThen(this::startPendingDownload);
+    }
+
+    private void queueBlobDownloadWithReward(String url, String mimetype, String contentDisposition) {
+        pendingBlobUrl = url;
+        pendingBlobMime = mimetype;
+        pendingBlobDisposition = contentDisposition;
+        showRewardedAdThen(this::startPendingBlobDownload);
+    }
+
+    private void startPendingBlobDownload() {
+        if (pendingBlobUrl == null) return;
+        String url = pendingBlobUrl;
+        String mime = pendingBlobMime;
+        String disp = pendingBlobDisposition;
+        pendingBlobUrl = null;
+        pendingBlobMime = null;
+        pendingBlobDisposition = null;
+        fetchBlobViaJs(url, mime, disp);
+    }
+
+    private void showRewardedAdThen(final Runnable proceed) {
         if (rewardedAd != null) {
             final boolean[] rewarded = { false };
             rewardedAd.setFullScreenContentCallback(new com.google.android.gms.ads.FullScreenContentCallback() {
@@ -322,17 +346,17 @@ public class MainActivity extends AppCompatActivity {
                 @Override public void onAdFailedToShowFullScreenContent(com.google.android.gms.ads.AdError adError) {
                     rewardedAd = null;
                     loadRewardedAd();
-                    startPendingDownload();
+                    proceed.run();
                 }
             });
             rewardedAd.show(MainActivity.this, rewardItem -> {
                 rewarded[0] = true;
-                startPendingDownload();
+                proceed.run();
             });
         } else {
             // Ad not ready yet — start loading and let the download proceed so the user isn't blocked.
             loadRewardedAd();
-            startPendingDownload();
+            proceed.run();
         }
     }
 

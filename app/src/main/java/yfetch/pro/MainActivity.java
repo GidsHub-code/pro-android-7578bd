@@ -30,13 +30,23 @@ public class MainActivity extends AppCompatActivity {
     private WebView webView;
     private SwipeRefreshLayout refreshLayout;
     private com.google.android.gms.ads.AdView adView;
+    private com.google.android.gms.ads.rewarded.RewardedAd rewardedAd;
+    private boolean rewardedLoading = false;
     private ValueCallback<Uri[]> fileChooserCallback;
     private ActivityResultLauncher<Intent> fileChooserLauncher;
     private PermissionRequest pendingWebPermissionRequest;
 
+    // Pending download details (queued while rewarded ad is shown)
+    private String pendingDlUrl;
+    private String pendingDlUserAgent;
+    private String pendingDlContentDisposition;
+    private String pendingDlMimeType;
+    private long pendingDlContentLength;
+
     private static final String START_URL = "https://yfetch.nnadigideon17.workers.dev";
     private static final String HOST = "yfetch.nnadigideon17.workers.dev";
     private static final int REQ_PERMISSIONS = 4242;
+    private static final String REWARDED_AD_UNIT_ID = "ca-app-pub-9769231127538087/1162656976";
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -77,9 +87,22 @@ public class MainActivity extends AppCompatActivity {
                     adView.loadAd(new com.google.android.gms.ads.AdRequest.Builder().build());
                 } catch (Throwable ignored) {}
             }
+            loadRewardedAd();
         });
 
+        // JS bridge so blob:/data: downloads can be handed to native code
+        webView.addJavascriptInterface(new Git2AppDownloadBridge(), "Git2AppDownload");
 
+        // Native handler for any download the WebView triggers (content-disposition, <a download>, etc.)
+        webView.setDownloadListener((url, userAgent, contentDisposition, mimetype, contentLength) -> {
+            if (url == null) return;
+            if (url.startsWith("blob:") || url.startsWith("data:")) {
+                // Blob/data URLs can't be downloaded natively — fetch them in JS and pipe base64 back.
+                fetchBlobViaJs(url, mimetype, contentDisposition);
+                return;
+            }
+            queueDownloadWithReward(url, userAgent, contentDisposition, mimetype, contentLength);
+        });
 
         WebSettings s = webView.getSettings();
         s.setJavaScriptEnabled(true);
@@ -275,6 +298,161 @@ public class MainActivity extends AppCompatActivity {
             ActivityCompat.requestPermissions(this, needed.toArray(new String[0]), REQ_PERMISSIONS);
         }
     }
+
+    // ============================================================
+    //  Downloads (with optional AdMob rewarded-ad gating)
+    // ============================================================
+
+    private void queueDownloadWithReward(String url, String userAgent, String contentDisposition, String mimetype, long contentLength) {
+        pendingDlUrl = url;
+        pendingDlUserAgent = userAgent;
+        pendingDlContentDisposition = contentDisposition;
+        pendingDlMimeType = mimetype;
+        pendingDlContentLength = contentLength;
+        if (rewardedAd != null) {
+            final boolean[] rewarded = { false };
+            rewardedAd.setFullScreenContentCallback(new com.google.android.gms.ads.FullScreenContentCallback() {
+                @Override public void onAdDismissedFullScreenContent() {
+                    rewardedAd = null;
+                    loadRewardedAd();
+                    if (!rewarded[0]) {
+                        android.widget.Toast.makeText(MainActivity.this, "Watch the ad to start your download", android.widget.Toast.LENGTH_SHORT).show();
+                    }
+                }
+                @Override public void onAdFailedToShowFullScreenContent(com.google.android.gms.ads.AdError adError) {
+                    rewardedAd = null;
+                    loadRewardedAd();
+                    startPendingDownload();
+                }
+            });
+            rewardedAd.show(MainActivity.this, rewardItem -> {
+                rewarded[0] = true;
+                startPendingDownload();
+            });
+        } else {
+            // Ad not ready yet — start loading and let the download proceed so the user isn't blocked.
+            loadRewardedAd();
+            startPendingDownload();
+        }
+    }
+
+    private void loadRewardedAd() {
+        if (rewardedAd != null || rewardedLoading) return;
+        rewardedLoading = true;
+        try {
+            com.google.android.gms.ads.rewarded.RewardedAd.load(
+                this,
+                REWARDED_AD_UNIT_ID,
+                new com.google.android.gms.ads.AdRequest.Builder().build(),
+                new com.google.android.gms.ads.rewarded.RewardedAdLoadCallback() {
+                    @Override
+                    public void onAdLoaded(com.google.android.gms.ads.rewarded.RewardedAd ad) {
+                        rewardedAd = ad;
+                        rewardedLoading = false;
+                    }
+                    @Override
+                    public void onAdFailedToLoad(com.google.android.gms.ads.LoadAdError adError) {
+                        rewardedAd = null;
+                        rewardedLoading = false;
+                    }
+                }
+            );
+        } catch (Throwable t) {
+            rewardedLoading = false;
+        }
+    }
+
+    private void startPendingDownload() {
+        if (pendingDlUrl == null) return;
+        String url = pendingDlUrl;
+        String userAgent = pendingDlUserAgent;
+        String contentDisposition = pendingDlContentDisposition;
+        String mimetype = pendingDlMimeType;
+        pendingDlUrl = null;
+        pendingDlUserAgent = null;
+        pendingDlContentDisposition = null;
+        pendingDlMimeType = null;
+        pendingDlContentLength = 0;
+        try {
+            String fileName = android.webkit.URLUtil.guessFileName(url, contentDisposition, mimetype);
+            android.app.DownloadManager.Request request = new android.app.DownloadManager.Request(Uri.parse(url));
+            if (mimetype != null) request.setMimeType(mimetype);
+            request.addRequestHeader("User-Agent", userAgent != null ? userAgent : webView.getSettings().getUserAgentString());
+            String cookies = android.webkit.CookieManager.getInstance().getCookie(url);
+            if (cookies != null) request.addRequestHeader("Cookie", cookies);
+            request.setTitle(fileName);
+            request.setDescription("Downloading " + fileName);
+            request.setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+            request.allowScanningByMediaScanner();
+            request.setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, fileName);
+            android.app.DownloadManager dm = (android.app.DownloadManager) getSystemService(android.content.Context.DOWNLOAD_SERVICE);
+            if (dm != null) {
+                dm.enqueue(request);
+                android.widget.Toast.makeText(this, "Downloading " + fileName, android.widget.Toast.LENGTH_SHORT).show();
+            }
+        } catch (Throwable t) {
+            android.widget.Toast.makeText(this, "Download failed: " + t.getMessage(), android.widget.Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /**
+     * Blob/data URLs can't be read by DownloadManager. Fetch them in the WebView,
+     * convert to base64, and pass back through the JS bridge to write to Downloads.
+     */
+    private void fetchBlobViaJs(String url, String mimetype, String contentDisposition) {
+        String safeUrl = url.replace("'", "\'");
+        String safeMime = (mimetype == null ? "" : mimetype).replace("'", "\'");
+        String safeDisp = (contentDisposition == null ? "" : contentDisposition).replace("'", "\'");
+        String js =
+            "(function(){try{"
+          + "fetch('" + safeUrl + "').then(function(r){return r.blob();}).then(function(b){"
+          + "var reader=new FileReader();"
+          + "reader.onloadend=function(){"
+          + "var d=reader.result||'';var i=d.indexOf(',');"
+          + "var base64=i>=0?d.substring(i+1):d;"
+          + "Git2AppDownload.saveBase64(base64,'" + safeMime + "','" + safeDisp + "','" + safeUrl + "');"
+          + "};reader.readAsDataURL(b);"
+          + "}).catch(function(e){Git2AppDownload.reportError(String(e));});"
+          + "}catch(e){Git2AppDownload.reportError(String(e));}})();";
+        runOnUiThread(() -> webView.evaluateJavascript(js, null));
+    }
+
+    public class Git2AppDownloadBridge {
+        @android.webkit.JavascriptInterface
+        public void saveBase64(String base64, String mimetype, String contentDisposition, String sourceUrl) {
+            try {
+                byte[] bytes = android.util.Base64.decode(base64, android.util.Base64.DEFAULT);
+                String fileName = android.webkit.URLUtil.guessFileName(
+                    (sourceUrl == null || sourceUrl.isEmpty()) ? "download" : sourceUrl,
+                    contentDisposition,
+                    mimetype
+                );
+                java.io.File dir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS);
+                if (!dir.exists()) dir.mkdirs();
+                java.io.File out = new java.io.File(dir, fileName);
+                java.io.FileOutputStream fos = new java.io.FileOutputStream(out);
+                fos.write(bytes);
+                fos.close();
+                // Register with DownloadManager so it shows in the Downloads UI + a notification.
+                try {
+                    android.app.DownloadManager dm = (android.app.DownloadManager) getSystemService(android.content.Context.DOWNLOAD_SERVICE);
+                    if (dm != null) {
+                        dm.addCompletedDownload(fileName, fileName, true, mimetype == null ? "application/octet-stream" : mimetype,
+                            out.getAbsolutePath(), bytes.length, true);
+                    }
+                } catch (Throwable ignored) {}
+                runOnUiThread(() -> android.widget.Toast.makeText(MainActivity.this, "Saved " + fileName + " to Downloads", android.widget.Toast.LENGTH_LONG).show());
+            } catch (Throwable t) {
+                runOnUiThread(() -> android.widget.Toast.makeText(MainActivity.this, "Download failed: " + t.getMessage(), android.widget.Toast.LENGTH_LONG).show());
+            }
+        }
+
+        @android.webkit.JavascriptInterface
+        public void reportError(String message) {
+            runOnUiThread(() -> android.widget.Toast.makeText(MainActivity.this, "Download failed: " + message, android.widget.Toast.LENGTH_LONG).show());
+        }
+    }
+
 
     @Override
     protected void onSaveInstanceState(Bundle outState) {

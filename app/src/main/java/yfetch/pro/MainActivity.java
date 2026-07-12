@@ -339,7 +339,10 @@ public class MainActivity extends AppCompatActivity {
                 @Override public void onAdDismissedFullScreenContent() {
                     rewardedAd = null;
                     loadRewardedAd();
-                    if (!rewarded[0]) {
+                    if (rewarded[0]) {
+                        // Ad fully watched — start the download now that the ad UI is gone.
+                        proceed.run();
+                    } else {
                         android.widget.Toast.makeText(MainActivity.this, "Watch the ad to start your download", android.widget.Toast.LENGTH_SHORT).show();
                     }
                 }
@@ -350,8 +353,8 @@ public class MainActivity extends AppCompatActivity {
                 }
             });
             rewardedAd.show(MainActivity.this, rewardItem -> {
+                // Just record that the reward was earned; actual download runs on dismissal.
                 rewarded[0] = true;
-                proceed.run();
             });
         } else {
             // Ad not ready yet — start loading and let the download proceed so the user isn't blocked.

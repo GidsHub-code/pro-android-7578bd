@@ -451,20 +451,48 @@ public class MainActivity extends AppCompatActivity {
                     contentDisposition,
                     mimetype
                 );
-                java.io.File dir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS);
-                if (!dir.exists()) dir.mkdirs();
-                java.io.File out = new java.io.File(dir, fileName);
-                java.io.FileOutputStream fos = new java.io.FileOutputStream(out);
-                fos.write(bytes);
-                fos.close();
-                // Register with DownloadManager so it shows in the Downloads UI + a notification.
-                try {
-                    android.app.DownloadManager dm = (android.app.DownloadManager) getSystemService(android.content.Context.DOWNLOAD_SERVICE);
-                    if (dm != null) {
-                        dm.addCompletedDownload(fileName, fileName, true, mimetype == null ? "application/octet-stream" : mimetype,
-                            out.getAbsolutePath(), bytes.length, true);
+                String safeMime = (mimetype == null || mimetype.isEmpty()) ? "application/octet-stream" : mimetype;
+
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    // Scoped storage: use MediaStore on Android 10+
+                    android.content.ContentValues values = new android.content.ContentValues();
+                    values.put(android.provider.MediaStore.Downloads.DISPLAY_NAME, fileName);
+                    values.put(android.provider.MediaStore.Downloads.MIME_TYPE, safeMime);
+                    values.put(android.provider.MediaStore.Downloads.IS_PENDING, 1);
+
+                    android.content.ContentResolver resolver = getContentResolver();
+                    android.net.Uri uri = resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+                    if (uri == null) throw new java.io.IOException("MediaStore insert returned null");
+
+                    java.io.OutputStream os = resolver.openOutputStream(uri);
+                    if (os == null) throw new java.io.IOException("Could not open output stream");
+                    try {
+                        os.write(bytes);
+                        os.flush();
+                    } finally {
+                        os.close();
                     }
-                } catch (Throwable ignored) {}
+
+                    android.content.ContentValues done = new android.content.ContentValues();
+                    done.put(android.provider.MediaStore.Downloads.IS_PENDING, 0);
+                    resolver.update(uri, done, null, null);
+                } else {
+                    // Pre-scoped-storage: direct file write + DownloadManager registration
+                    java.io.File dir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS);
+                    if (!dir.exists()) dir.mkdirs();
+                    java.io.File out = new java.io.File(dir, fileName);
+                    java.io.FileOutputStream fos = new java.io.FileOutputStream(out);
+                    fos.write(bytes);
+                    fos.close();
+                    try {
+                        android.app.DownloadManager dm = (android.app.DownloadManager) getSystemService(android.content.Context.DOWNLOAD_SERVICE);
+                        if (dm != null) {
+                            dm.addCompletedDownload(fileName, fileName, true, safeMime,
+                                out.getAbsolutePath(), bytes.length, true);
+                        }
+                    } catch (Throwable ignored) {}
+                }
+
                 runOnUiThread(() -> android.widget.Toast.makeText(MainActivity.this, "Saved " + fileName + " to Downloads", android.widget.Toast.LENGTH_LONG).show());
             } catch (Throwable t) {
                 runOnUiThread(() -> android.widget.Toast.makeText(MainActivity.this, "Download failed: " + t.getMessage(), android.widget.Toast.LENGTH_LONG).show());

@@ -32,6 +32,8 @@ public class MainActivity extends AppCompatActivity {
     private com.google.android.gms.ads.AdView adView;
     private com.google.android.gms.ads.rewarded.RewardedAd rewardedAd;
     private boolean rewardedLoading = false;
+    private com.google.android.gms.ads.nativead.NativeAd currentNativeAd;
+    private int downloadNotifId = 9000;
     private ValueCallback<Uri[]> fileChooserCallback;
     private ActivityResultLauncher<Intent> fileChooserLauncher;
     private PermissionRequest pendingWebPermissionRequest;
@@ -50,6 +52,8 @@ public class MainActivity extends AppCompatActivity {
     private static final String HOST = "yfetch.nnadigideon17.workers.dev";
     private static final int REQ_PERMISSIONS = 4242;
     private static final String REWARDED_AD_UNIT_ID = "ca-app-pub-9769231127538087/1162656976";
+    private static final String NATIVE_AD_UNIT_ID = "ca-app-pub-9769231127538087/5145544685";
+    private static final String DOWNLOAD_CHANNEL_ID = "git2app_downloads";
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -81,6 +85,7 @@ public class MainActivity extends AppCompatActivity {
         });
 
         createNotificationChannel();
+        createDownloadNotificationChannel();
         requestRuntimePermissions();
         registerFileChooser();
         adView = findViewById(R.id.adView);
@@ -91,6 +96,7 @@ public class MainActivity extends AppCompatActivity {
                 } catch (Throwable ignored) {}
             }
             loadRewardedAd();
+            loadNativeAd();
         });
 
         // JS bridge so blob:/data: downloads can be handed to native code
@@ -270,7 +276,49 @@ public class MainActivity extends AppCompatActivity {
             channel.setLockscreenVisibility(android.app.Notification.VISIBILITY_PUBLIC);
             NotificationManager nm = getSystemService(NotificationManager.class);
             if (nm != null) nm.createNotificationChannel(channel);
+    }
+
+    private void createDownloadNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel channel = new NotificationChannel(
+                DOWNLOAD_CHANNEL_ID, "Downloads", NotificationManager.IMPORTANCE_LOW);
+            channel.setDescription("File download progress and completion");
+            NotificationManager nm = getSystemService(NotificationManager.class);
+            if (nm != null) nm.createNotificationChannel(channel);
         }
+    }
+
+    private int nextDownloadNotifId() { return ++downloadNotifId; }
+
+    private void notifyDownloadProgress(int notifId, String fileName) {
+        try {
+            androidx.core.app.NotificationCompat.Builder b = new androidx.core.app.NotificationCompat.Builder(this, DOWNLOAD_CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.stat_sys_download)
+                .setContentTitle("Downloading " + fileName)
+                .setContentText("Saving to Downloads…")
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+                .setProgress(0, 0, true);
+            NotificationManager nm = (NotificationManager) getSystemService(android.content.Context.NOTIFICATION_SERVICE);
+            if (nm != null) nm.notify(notifId, b.build());
+        } catch (Throwable ignored) {}
+    }
+
+    private void notifyDownloadComplete(int notifId, String fileName, boolean success, String errMsg) {
+        try {
+            androidx.core.app.NotificationCompat.Builder b = new androidx.core.app.NotificationCompat.Builder(this, DOWNLOAD_CHANNEL_ID)
+                .setSmallIcon(success ? android.R.drawable.stat_sys_download_done : android.R.drawable.stat_notify_error)
+                .setContentTitle(success ? "Download complete" : "Download failed")
+                .setContentText(success ? (fileName + " saved to Downloads") : (fileName + ": " + (errMsg == null ? "error" : errMsg)))
+                .setAutoCancel(true)
+                .setOngoing(false)
+                .setProgress(0, 0, false);
+            NotificationManager nm = (NotificationManager) getSystemService(android.content.Context.NOTIFICATION_SERVICE);
+            if (nm != null) nm.notify(notifId, b.build());
+        } catch (Throwable ignored) {}
+    }
+
+
     }
 
     private void requestRuntimePermissions() {
@@ -389,6 +437,57 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private void loadNativeAd() {
+        try {
+            final android.widget.FrameLayout container = findViewById(R.id.nativeAdContainer);
+            if (container == null) return;
+            com.google.android.gms.ads.AdLoader loader = new com.google.android.gms.ads.AdLoader.Builder(this, NATIVE_AD_UNIT_ID)
+                .forNativeAd(nativeAd -> {
+                    if (isDestroyed() || isFinishing()) { nativeAd.destroy(); return; }
+                    if (currentNativeAd != null) currentNativeAd.destroy();
+                    currentNativeAd = nativeAd;
+                    android.view.LayoutInflater inflater = android.view.LayoutInflater.from(MainActivity.this);
+                    com.google.android.gms.ads.nativead.NativeAdView adView = (com.google.android.gms.ads.nativead.NativeAdView)
+                        inflater.inflate(R.layout.native_ad, container, false);
+                    populateNativeAdView(nativeAd, adView);
+                    container.removeAllViews();
+                    container.addView(adView);
+                    container.setVisibility(View.VISIBLE);
+                })
+                .withAdListener(new com.google.android.gms.ads.AdListener() {
+                    @Override public void onAdFailedToLoad(com.google.android.gms.ads.LoadAdError e) {
+                        container.setVisibility(View.GONE);
+                    }
+                })
+                .build();
+            loader.loadAd(new com.google.android.gms.ads.AdRequest.Builder().build());
+        } catch (Throwable ignored) {}
+    }
+
+    private void populateNativeAdView(com.google.android.gms.ads.nativead.NativeAd nativeAd, com.google.android.gms.ads.nativead.NativeAdView adView) {
+        android.widget.TextView headline = adView.findViewById(R.id.ad_headline);
+        android.widget.TextView body = adView.findViewById(R.id.ad_body);
+        android.widget.Button cta = adView.findViewById(R.id.ad_call_to_action);
+        android.widget.ImageView icon = adView.findViewById(R.id.ad_icon);
+        com.google.android.gms.ads.nativead.MediaView media = adView.findViewById(R.id.ad_media);
+
+        adView.setHeadlineView(headline);
+        adView.setBodyView(body);
+        adView.setCallToActionView(cta);
+        adView.setIconView(icon);
+        adView.setMediaView(media);
+
+        headline.setText(nativeAd.getHeadline());
+        if (nativeAd.getBody() == null) { body.setVisibility(View.GONE); } else { body.setVisibility(View.VISIBLE); body.setText(nativeAd.getBody()); }
+        if (nativeAd.getCallToAction() == null) { cta.setVisibility(View.GONE); } else { cta.setVisibility(View.VISIBLE); cta.setText(nativeAd.getCallToAction()); }
+        if (nativeAd.getIcon() == null) { icon.setVisibility(View.GONE); } else { icon.setVisibility(View.VISIBLE); icon.setImageDrawable(nativeAd.getIcon().getDrawable()); }
+        if (nativeAd.getMediaContent() != null) media.setMediaContent(nativeAd.getMediaContent());
+        adView.setNativeAd(nativeAd);
+    }
+
+
+
+
     private void startPendingDownload() {
         if (pendingDlUrl == null) return;
         String url = pendingDlUrl;
@@ -410,6 +509,8 @@ public class MainActivity extends AppCompatActivity {
             request.setTitle(fileName);
             request.setDescription("Downloading " + fileName);
             request.setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+            // System DownloadManager already posts a live progress notification and a
+            // completed notification via the visibility flag above.
             request.allowScanningByMediaScanner();
             request.setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, fileName);
             android.app.DownloadManager dm = (android.app.DownloadManager) getSystemService(android.content.Context.DOWNLOAD_SERVICE);
@@ -426,10 +527,17 @@ public class MainActivity extends AppCompatActivity {
      * Blob/data URLs can't be read by DownloadManager. Fetch them in the WebView,
      * convert to base64, and pass back through the JS bridge to write to Downloads.
      */
+    private int currentBlobNotifId = 0;
+    private String currentBlobFileName = "download";
+
     private void fetchBlobViaJs(String url, String mimetype, String contentDisposition) {
         String safeUrl = url.replace("'", "\'");
         String safeMime = (mimetype == null ? "" : mimetype).replace("'", "\'");
         String safeDisp = (contentDisposition == null ? "" : contentDisposition).replace("'", "\'");
+        currentBlobFileName = android.webkit.URLUtil.guessFileName(url, contentDisposition, mimetype);
+        currentBlobNotifId = nextDownloadNotifId();
+        notifyDownloadProgress(currentBlobNotifId, currentBlobFileName);
+        runOnUiThread(() -> android.widget.Toast.makeText(MainActivity.this, "Downloading " + currentBlobFileName + "…", android.widget.Toast.LENGTH_SHORT).show());
         String js =
             "(function(){try{"
           + "fetch('" + safeUrl + "').then(function(r){return r.blob();}).then(function(b){"
@@ -496,14 +604,19 @@ public class MainActivity extends AppCompatActivity {
                     } catch (Throwable ignored) {}
                 }
 
-                runOnUiThread(() -> android.widget.Toast.makeText(MainActivity.this, "Saved " + fileName + " to Downloads", android.widget.Toast.LENGTH_LONG).show());
+                final String fn = fileName;
+                notifyDownloadComplete(currentBlobNotifId, fn, true, null);
+                runOnUiThread(() -> android.widget.Toast.makeText(MainActivity.this, "Saved " + fn + " to Downloads", android.widget.Toast.LENGTH_LONG).show());
             } catch (Throwable t) {
-                runOnUiThread(() -> android.widget.Toast.makeText(MainActivity.this, "Download failed: " + t.getMessage(), android.widget.Toast.LENGTH_LONG).show());
+                final String msg = t.getMessage();
+                notifyDownloadComplete(currentBlobNotifId, currentBlobFileName, false, msg);
+                runOnUiThread(() -> android.widget.Toast.makeText(MainActivity.this, "Download failed: " + msg, android.widget.Toast.LENGTH_LONG).show());
             }
         }
 
         @android.webkit.JavascriptInterface
         public void reportError(String message) {
+            notifyDownloadComplete(currentBlobNotifId, currentBlobFileName, false, message);
             runOnUiThread(() -> android.widget.Toast.makeText(MainActivity.this, "Download failed: " + message, android.widget.Toast.LENGTH_LONG).show());
         }
     }
@@ -530,6 +643,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         if (adView != null) adView.destroy();
+        if (currentNativeAd != null) { currentNativeAd.destroy(); currentNativeAd = null; }
         super.onDestroy();
     }
 

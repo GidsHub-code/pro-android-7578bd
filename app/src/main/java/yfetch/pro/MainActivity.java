@@ -276,6 +276,7 @@ public class MainActivity extends AppCompatActivity {
             channel.setLockscreenVisibility(android.app.Notification.VISIBILITY_PUBLIC);
             NotificationManager nm = getSystemService(NotificationManager.class);
             if (nm != null) nm.createNotificationChannel(channel);
+        }
     }
 
     private void createDownloadNotificationChannel() {
@@ -316,9 +317,6 @@ public class MainActivity extends AppCompatActivity {
             NotificationManager nm = (NotificationManager) getSystemService(android.content.Context.NOTIFICATION_SERVICE);
             if (nm != null) nm.notify(notifId, b.build());
         } catch (Throwable ignored) {}
-    }
-
-
     }
 
     private void requestRuntimePermissions() {

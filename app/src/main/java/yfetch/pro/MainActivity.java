@@ -32,6 +32,10 @@ public class MainActivity extends AppCompatActivity {
     private com.google.android.gms.ads.AdView adView;
     private com.google.android.gms.ads.rewarded.RewardedAd rewardedAd;
     private boolean rewardedLoading = false;
+    // Tracks whether onStart has already fired once for this activity instance.
+    // The very first onStart happens right after onCreate (ads are loaded there already),
+    // every onStart AFTER that means the user actually left and came back to the app.
+    private boolean hasStartedBefore = false;
     private com.google.android.gms.ads.nativead.NativeAd currentNativeAd;
     private int downloadNotifId = 9000;
     private ValueCallback<Uri[]> fileChooserCallback;
@@ -90,11 +94,7 @@ public class MainActivity extends AppCompatActivity {
         registerFileChooser();
         adView = findViewById(R.id.adView);
         com.google.android.gms.ads.MobileAds.initialize(this, initStatus -> {
-            if (adView != null) {
-                try {
-                    adView.loadAd(new com.google.android.gms.ads.AdRequest.Builder().build());
-                } catch (Throwable ignored) {}
-            }
+            loadBannerAd();
             loadRewardedAd();
             loadNativeAd();
         });
@@ -435,6 +435,38 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private static final String BANNER_AD_UNIT_ID = "ca-app-pub-9769231127538087/6516654492";
+
+    /**
+     * Loads (or reloads) the banner using an anchored ADAPTIVE size computed from the
+     * device's actual current width, instead of the fixed 320x50 "BANNER" constant.
+     * This makes the banner render at full, correctly-scaled width on every phone,
+     * foldable and tablet, rather than a small fixed-size box.
+     */
+    private void loadBannerAd() {
+        if (adView == null) return;
+        try {
+            android.util.DisplayMetrics metrics = getResources().getDisplayMetrics();
+            float density = metrics.density;
+            int screenWidthDp;
+            if (Build.VERSION.SDK_INT >= 30) {
+                android.view.WindowMetrics windowMetrics = getWindowManager().getCurrentWindowMetrics();
+                screenWidthDp = (int) (windowMetrics.getBounds().width() / density);
+            } else {
+                screenWidthDp = (int) (metrics.widthPixels / density);
+            }
+            com.google.android.gms.ads.AdSize adSize =
+                com.google.android.gms.ads.AdSize.getCurrentOrientationAnchoredAdaptiveBannerAdSize(this, screenWidthDp);
+            adView.setAdSize(adSize);
+            // setAdUnitId() may only be called once per AdView instance - guard against
+            // calling it again on later reloads (e.g. when the user returns to the app).
+            if (adView.getAdUnitId() == null) {
+                adView.setAdUnitId(BANNER_AD_UNIT_ID);
+            }
+            adView.loadAd(new com.google.android.gms.ads.AdRequest.Builder().build());
+        } catch (Throwable ignored) {}
+    }
+
     private void loadNativeAd() {
         try {
             final android.widget.FrameLayout container = findViewById(R.id.nativeAdContainer);
@@ -624,6 +656,29 @@ public class MainActivity extends AppCompatActivity {
     protected void onSaveInstanceState(Bundle outState) {
         super.onSaveInstanceState(outState);
         webView.saveState(outState);
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        // The first onStart fires right after onCreate — ads are already being loaded
+        // there. Every onStart AFTER that means the activity was stopped (user left
+        // the app / backgrounded it / switched apps) and is now visible again, so
+        // refresh both the banner and the native ad with a fresh fill.
+        if (!hasStartedBefore) {
+            hasStartedBefore = true;
+        } else {
+            loadBannerAd();
+            loadNativeAd();
+        }
+    }
+
+    @Override
+    public void onConfigurationChanged(android.content.res.Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        // Screen width changes on rotation/fold — recompute the adaptive banner size
+        // for the new width so it keeps filling the screen correctly.
+        loadBannerAd();
     }
 
     @Override

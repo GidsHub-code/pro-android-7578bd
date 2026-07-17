@@ -463,8 +463,22 @@ public class MainActivity extends AppCompatActivity {
             if (adView.getAdUnitId() == null) {
                 adView.setAdUnitId(BANNER_AD_UNIT_ID);
             }
+            adView.setAdListener(new com.google.android.gms.ads.AdListener() {
+                @Override
+                public void onAdLoaded() {
+                    android.util.Log.d("YFetchAds", "Banner loaded OK");
+                }
+                @Override
+                public void onAdFailedToLoad(com.google.android.gms.ads.LoadAdError adError) {
+                    android.util.Log.e("YFetchAds", "Banner FAILED to load: code=" + adError.getCode()
+                        + " domain=" + adError.getDomain()
+                        + " message=" + adError.getMessage());
+                }
+            });
             adView.loadAd(new com.google.android.gms.ads.AdRequest.Builder().build());
-        } catch (Throwable ignored) {}
+        } catch (Throwable t) {
+            android.util.Log.e("YFetchAds", "Banner load threw exception", t);
+        }
     }
 
     private void loadNativeAd() {
@@ -473,6 +487,7 @@ public class MainActivity extends AppCompatActivity {
             if (container == null) return;
             com.google.android.gms.ads.AdLoader loader = new com.google.android.gms.ads.AdLoader.Builder(this, NATIVE_AD_UNIT_ID)
                 .forNativeAd(nativeAd -> {
+                    android.util.Log.d("YFetchAds", "Native ad loaded OK");
                     if (isDestroyed() || isFinishing()) { nativeAd.destroy(); return; }
                     if (currentNativeAd != null) currentNativeAd.destroy();
                     currentNativeAd = nativeAd;
@@ -486,6 +501,9 @@ public class MainActivity extends AppCompatActivity {
                 })
                 .withAdListener(new com.google.android.gms.ads.AdListener() {
                     @Override public void onAdFailedToLoad(com.google.android.gms.ads.LoadAdError e) {
+                        android.util.Log.e("YFetchAds", "Native ad FAILED to load: code=" + e.getCode()
+                            + " domain=" + e.getDomain()
+                            + " message=" + e.getMessage());
                         container.setVisibility(View.GONE);
                     }
                 })
